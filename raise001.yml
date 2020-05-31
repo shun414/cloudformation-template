@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create EC2 Instance and RDS
+Parameters:
+  KeyName: 
+    Description : Name of an existing EC2 KeyPair.
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription : Can contain only ASCII characters.
+  MyRDSMasterUser:
+    Type: String
+    Default: admin
+    MinLength: 1
+    MaxLength: 16
+    NoEcho: true
+    AllowedPattern: '[a-z]+'
+  MyRDSMasterPassword:
+    Type: String
+    Default: password
+    MinLength: 8
+    MaxLength: 16
+    NoEcho: true
+    AllowedPattern : '[^\/@"]+'
+Resources:
+  FirstVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      Tags:
+      - Key: Name
+        Value: FirstVPC
+  ## I-GW ##
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: FirstVPC-IGW
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref FirstVPC
+      InternetGatewayId: !Ref InternetGateway
+  FrontendRouteTable:
+    Type: AWS::EC2::RouteTable
+    DependsOn: AttachGateway
+    Properties:
+      VpcId: !Ref FirstVPC
+      Tags:
+      - Key: Name
+        Value: FirstVPC-FrontendRoute
+  ## ↓ルートテーブルの指定 ##
+  FrontendRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref FrontendRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  ## Public subnet ## 
+  FrontendSubnet:
+    Type: AWS::EC2::Subnet
+    DependsOn: AttachGateway
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: "ap-northeast-1a"
+      MapPublicIpOnLaunch: 'true'
+      VpcId: !Ref FirstVPC
+      Tags:
+      - Key: Name
+        Value: FirstVPC-FrontendSubnet
+  FrontendSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref FrontendSubnet
+      RouteTableId: !Ref FrontendRouteTable
+  ## Private subnet ##
+  PrivateSubnet1A:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref FirstVPC
+      CidrBlock: 10.0.100.0/24
+      AvailabilityZone: "ap-northeast-1a"
+      Tags:
+      - Key: Name
+        Value: FirstVPC-PrivateSubnet1A
+  PrivateRouteTable: 
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref FirstVPC
+  PriSubnet1ARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1A
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet1C:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref FirstVPC
+      CidrBlock: 10.0.101.0/24
+      AvailabilityZone: "ap-northeast-1c"
+      Tags:
+      - Key: Name
+        Value: FirstVPC-PrivateSubnet1C
+  PriSubnet1CRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1C
+      RouteTableId: !Ref PrivateRouteTable
+### EC2 ###
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-09728320fb4fb4738
+      InstanceType: t2.micro
+      SubnetId: !Ref FrontendSubnet
+      BlockDeviceMappings:   
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 8
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+         - !Ref InstanceSecurityGroup
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PublicIngress
+      VpcId: !Ref FirstVPC
+      SecurityGroupIngress:
+        -
+          IpProtocol: tcp  
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        -
+          IpProtocol: tcp  
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+######## RDS #########
+  MyRDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: SubnetGroup for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1A
+        - !Ref PrivateSubnet1C
+  MyRDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SecurityGroup for DB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          FromPort: '3306'
+          ToPort: '3306'
+      VpcId: !Ref FirstVPC
+  MyRDS:
+    Type: AWS::RDS::DBInstance
+    Properties: 
+      DBInstanceClass: db.t2.micro
+      Engine: MySQL
+      EngineVersion: "5.7.22"
+      DBSubnetGroupName: !Ref MyRDSSubnetGroup
+      VPCSecurityGroups: 
+        - !Ref MyRDSSecurityGroup
+      MasterUsername: !Ref MyRDSMasterUser
+      MasterUserPassword: !Ref MyRDSMasterPassword
+      AllocatedStorage: "100"
